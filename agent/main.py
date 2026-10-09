@@ -2,6 +2,8 @@
 import ctypes
 import queue
 import socket
+import sys
+import threading
 import tkinter as tk
 from tkinter import messagebox
 from urllib.parse import urlparse
@@ -10,10 +12,15 @@ import pystray
 import qrcode
 from PIL import Image, ImageTk
 
+import updater
 from config import Config, resource_dir
 from relay_client import RelayClient
+from version import __version__
 
 BG, FG, MUTED, ACCENT, WARN = "#0f1115", "#e8eaed", "#9aa0a6", "#3ddc84", "#fbbc04"
+FIRST_UPDATE_CHECK_MS = 30_000
+UPDATE_CHECK_MS = 6 * 3600_000
+ERROR_ALREADY_EXISTS = 183
 
 
 def qr_image(text, size=260):
@@ -31,6 +38,8 @@ class App:
         self.connected = False
         self.clients = 0
         self.stopped = False
+        self.update_status = ""  # text pro tray menu
+        self.updating = False
 
         self.root = tk.Tk()
         self.root.withdraw()
@@ -40,6 +49,8 @@ class App:
         if self.cfg["relay_url"]:
             self.client.start()
         self.root.after(150, self._poll_events)
+        if updater.can_update():
+            self.root.after(FIRST_UPDATE_CHECK_MS, self._scheduled_update_check)
 
     # ---------- okno ----------
     def _build_window(self):
@@ -69,7 +80,7 @@ class App:
         self.last_lbl = tk.Label(r, text="Zatím nic nenaskenováno", font=("Segoe UI", 11),
                                  bg=BG, fg=MUTED, wraplength=440)
         self.last_lbl.pack(pady=(10, 4))
-        tk.Label(r, text=f"PC: {socket.gethostname()} · spojení je šifrované end-to-end",
+        tk.Label(r, text=f"PC: {socket.gethostname()} · verze {__version__} · spojení je šifrované end-to-end",
                  font=("Segoe UI", 9), bg=BG, fg=MUTED).pack()
         tk.Label(r, text="Zavřením okna agent běží dál v oznamovací oblasti (u hodin).",
                  font=("Segoe UI", 9), bg=BG, fg=MUTED).pack(pady=(0, 14))
@@ -136,6 +147,11 @@ class App:
                              checked=lambda item: self.cfg["clipboard"]),
             pystray.MenuItem("Zrušit spárování všech telefonů", ui(self.reset_pairing)),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem(lambda item: f"Verze {__version__}" + (f" – {self.update_status}"
+                                                                     if self.update_status else ""),
+                             None, enabled=False),
+            pystray.MenuItem("Zkontrolovat aktualizace", ui(lambda: self.check_updates(manual=True)),
+                             visible=updater.can_update()),
             pystray.MenuItem("Ukončit", ui(self.quit)),
         )
         image = Image.open(self.res / "pwa" / "icons" / "icon-192.png")
@@ -160,6 +176,51 @@ class App:
         self.client.reconnect()
         self._refresh_qr()
         self.show_window()
+
+    # ---------- aktualizace ----------
+    def _scheduled_update_check(self):
+        if self.stopped:
+            return
+        self.check_updates(manual=False)
+        self.root.after(UPDATE_CHECK_MS, self._scheduled_update_check)
+
+    def check_updates(self, manual):
+        """Kontrola a instalace běží ve vlákně, výsledky jdou do UI přes frontu událostí."""
+        if self.updating:
+            return
+        self.updating = True
+        self._set_update_status("kontroluji…")
+        threading.Thread(target=self._update_worker, args=(manual,), daemon=True).start()
+
+    def _update_worker(self, manual):
+        post = lambda fn: self.events.put(("ui", fn))  # noqa: E731
+        try:
+            found = updater.check()
+            if not found:
+                post(lambda: self._update_done("aktuální", "Máte nejnovější verzi." if manual else None))
+                return
+            version, url, sha = found
+            post(lambda: self._set_update_status(f"stahuji {version}…"))
+            path = updater.download(url, sha)
+            post(lambda: self._install_update(path, version))
+        except Exception as e:  # síť, GitHub, kontrolní součet – zkusí se příště
+            msg = f"Aktualizace se nezdařila: {e}"
+            post(lambda: self._update_done("kontrola selhala", msg if manual else None))
+
+    def _update_done(self, status, message):
+        self.updating = False
+        self._set_update_status(status)
+        if message:
+            self.icon.notify(message, "EAN agent")
+
+    def _set_update_status(self, text):
+        self.update_status = text
+        self.icon.update_menu()
+
+    def _install_update(self, path, version):
+        self.icon.notify(f"Instaluji verzi {version}, agent se za chvíli sám znovu spustí.", "EAN agent")
+        updater.run_installer(path)
+        self.root.after(1500, self.quit)  # instalátor potřebuje, aby agent nebyl spuštěný
 
     def quit(self):
         self.stopped = True
@@ -192,9 +253,21 @@ class App:
         self.root.mainloop()
 
 
+def single_instance():
+    """Dva agenti by se u relay navzájem odpojovali – druhý se proto neotevře."""
+    handle = ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\EanAgent-single-instance")
+    if ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showinfo("EAN agent", "EAN agent už běží – najdeš ho v oznamovací oblasti u hodin.")
+        sys.exit(0)
+    return handle
+
+
 if __name__ == "__main__":
     try:  # ostré QR kódy na monitorech s větším měřítkem
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except (AttributeError, OSError):
         pass
+    _mutex = single_instance()
     App().run()
