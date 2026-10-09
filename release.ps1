@@ -15,7 +15,7 @@ if (git status --porcelain) { throw "Nejdřív commitni rozdělané změny." }
 $versionPy = "`"`"`"Verze agenta – mění ji release.ps1 při vydání nové verze.`"`"`"`n__version__ = `"$Version`"`n"
 [IO.File]::WriteAllText("$PSScriptRoot\agent\version.py", $versionPy, (New-Object Text.UTF8Encoding $false))
 
-cmd /c build.bat
+cmd /c "`"$PSScriptRoot\build.bat`""
 if ($LASTEXITCODE -ne 0) { throw "Sestavení selhalo" }
 
 $setup = "dist\EanAgent-Setup-$Version.exe"
