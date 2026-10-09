@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1115">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="EAN Skener">
+  <title>EAN Skener</title>
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="manifest.webmanifest">
+</head>
+<body>
+  <header>
+    <div class="conn" id="conn"><span class="dot"></span><span id="connText">Připojuji…</span></div>
+    <button class="icon-btn" id="torchBtn" hidden aria-label="Svítilna">🔦</button>
+  </header>
+
+  <main>
+    <section class="camera" id="camera">
+      <video id="video" playsinline muted autoplay></video>
+      <div class="guide" id="guide"><span></span></div>
+      <div class="flash" id="flash"></div>
+      <div class="cam-placeholder" id="placeholder">
+        <p id="placeholderText">Kamera je vypnutá</p>
+        <button class="primary" id="startBtn">Spustit skenování</button>
+      </div>
+    </section>
+
+    <section class="result">
+      <div class="last" id="last">
+        <div class="last-code" id="lastCode">—</div>
+        <div class="last-info" id="lastInfo">Namiřte kameru na čárový kód</div>
+      </div>
+      <div class="actions">
+        <button id="stopBtn" hidden>Zastavit kameru</button>
+        <button id="pairBtn" hidden>Naskenovat párovací QR</button>
+      </div>
+      <h2>Poslední kódy <small>(klepnutím odešlete znovu)</small></h2>
+      <ul id="history"></ul>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
