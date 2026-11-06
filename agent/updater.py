@@ -60,14 +60,30 @@ def check():
     return latest.lstrip("v"), setup["browser_download_url"], digest.lower()
 
 
-def download(url, sha256) -> str:
-    """Stáhne instalátor do dočasné složky a ověří ho. Vrátí cestu k souboru."""
-    data = _get(url, timeout=300)
-    if hashlib.sha256(data).hexdigest() != sha256:
-        raise ValueError("Stažený instalátor nesouhlasí s kontrolním součtem")
+def download(url, sha256, progress=None) -> str:
+    """Stáhne instalátor po částech do dočasné složky a ověří ho. Vrátí cestu k souboru.
+
+    progress(procenta) se volá průběžně; na pomalé síti může stahování trvat i minuty.
+    """
     path = os.path.join(tempfile.gettempdir(), url.rsplit("/", 1)[-1])
-    with open(path, "wb") as f:
-        f.write(data)
+    part = path + ".part"
+    digest = hashlib.sha256()
+    req = urllib.request.Request(url, headers=HEADERS)
+    with urllib.request.urlopen(req, timeout=60) as resp, open(part, "wb") as f:
+        total = int(resp.headers.get("Content-Length") or 0)
+        done, last_pct = 0, -1
+        while chunk := resp.read(256 * 1024):
+            f.write(chunk)
+            digest.update(chunk)
+            done += len(chunk)
+            pct = done * 100 // total if total else 0
+            if progress and pct != last_pct:
+                progress(pct)
+                last_pct = pct
+    if digest.hexdigest() != sha256:
+        os.remove(part)
+        raise ValueError("Stažený instalátor nesouhlasí s kontrolním součtem")
+    os.replace(part, path)
     return path
 
 

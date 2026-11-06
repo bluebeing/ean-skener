@@ -1,5 +1,6 @@
 """EAN agent: přijímá kódy z telefonu (přes šifrovaný relay) a vepisuje je do aktivního okna."""
 import ctypes
+import logging
 import queue
 import socket
 import sys
@@ -14,10 +15,12 @@ import qrcode
 from PIL import Image, ImageTk
 
 import updater
-from config import Config, resource_dir
+from config import DATA_DIR, Config, resource_dir
 from products import ProductTable
 from relay_client import RelayClient
 from version import __version__
+
+log = logging.getLogger("ean")
 
 BG, FG, MUTED, ACCENT, WARN, PANEL = "#0f1115", "#e8eaed", "#9aa0a6", "#3ddc84", "#fbbc04", "#181b21"
 PRODUCTS_CHECK_MS = 5000
@@ -47,6 +50,8 @@ class App:
         self.products = ProductTable()
         self.root = tk.Tk()
         self.root.withdraw()
+        # bez konzole by se chyby v Tk callbackách ztratily (stderr neexistuje)
+        self.root.report_callback_exception = lambda *exc: log.error("Chyba v okně", exc_info=exc)
         self.client = RelayClient(self.cfg, lambda ev, data: self.events.put((ev, data)), self.products)
         self._build_window()
         self._build_tray()
@@ -298,15 +303,25 @@ class App:
     def _update_worker(self, manual):
         post = lambda fn: self.events.put(("ui", fn))  # noqa: E731
         try:
+            log.info("Kontrola aktualizací (verze %s, %s)", __version__, "ručně" if manual else "automaticky")
             found = updater.check()
             if not found:
+                log.info("Aktualizace: žádná novější verze")
                 post(lambda: self._update_done("aktuální", "Máte nejnovější verzi." if manual else None))
                 return
             version, url, sha = found
+            log.info("Aktualizace: nalezena %s, stahuji %s", version, url)
             post(lambda: self._set_update_status(f"stahuji {version}…"))
-            path = updater.download(url, sha)
+
+            def progress(pct):
+                if pct % 10 == 0:
+                    log.info("Aktualizace: staženo %d %%", pct)
+                post(lambda: self._set_update_status(f"stahuji {version}… {pct} %"))
+            path = updater.download(url, sha, progress)
+            log.info("Aktualizace: staženo a ověřeno %s", path)
             post(lambda: self._install_update(path, version))
         except Exception as e:  # síť, GitHub, kontrolní součet – zkusí se příště
+            log.exception("Aktualizace selhala")
             msg = f"Aktualizace se nezdařila: {e}"
             post(lambda: self._update_done("kontrola selhala", msg if manual else None))
 
@@ -322,7 +337,13 @@ class App:
 
     def _install_update(self, path, version):
         self.icon.notify(f"Instaluji verzi {version}, agent se za chvíli sám znovu spustí.", "EAN agent")
-        updater.run_installer(path)
+        try:
+            updater.run_installer(path)
+        except OSError:
+            log.exception("Instalátor nejde spustit")
+            self._update_done("instalace selhala", "Instalátor aktualizace nejde spustit.")
+            return
+        log.info("Aktualizace: spuštěn instalátor %s, agent se ukončí", version)
         self.root.after(1500, self.quit)  # instalátor potřebuje, aby agent nebyl spuštěný
 
     def quit(self):
@@ -370,10 +391,31 @@ def single_instance():
     return handle
 
 
+def setup_logging():
+    """Log do data\\agent.log (max. ~1 MB) – bez kódů ani názvů produktů, jen provoz a chyby."""
+    from logging.handlers import RotatingFileHandler
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(DATA_DIR / "agent.log", maxBytes=512_000, backupCount=1, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+
+    def hook(exc_type, exc, tb):
+        log.critical("Neošetřená chyba", exc_info=(exc_type, exc, tb))
+    sys.excepthook = hook
+    threading.excepthook = lambda args: hook(args.exc_type, args.exc_value, args.exc_traceback)
+
+
 if __name__ == "__main__":
     try:  # ostré QR kódy na monitorech s větším měřítkem
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except (AttributeError, OSError):
         pass
+    setup_logging()
     _mutex = single_instance()
-    App().run()
+    log.info("Start agenta %s (%s)", __version__, sys.executable)
+    try:
+        App().run()
+    except Exception:
+        log.exception("Agent spadl")
+        raise
+    log.info("Agent ukončen")

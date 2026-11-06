@@ -1,6 +1,7 @@
 """Spojení agenta s relay serverem: přijímá šifrované kódy z telefonu a vepisuje je."""
 import asyncio
 import json
+import logging
 import socket
 import threading
 import time
@@ -13,6 +14,7 @@ import typer
 from crypto_box import Box, valid_code
 
 MAX_AGE_S = 60  # starší zprávy se zahodí (ochrana proti přehrání)
+log = logging.getLogger("ean.relay")
 
 
 class RelayClient:
@@ -56,6 +58,7 @@ class RelayClient:
                         delay = 1
                         await self._receive(ws)
                 except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as e:
+                    log.warning("Spojení se serverem: %s", e or type(e).__name__)
                     self.on_event("error", str(e))
                 finally:
                     self.ws = None
@@ -147,6 +150,7 @@ class RelayClient:
     def _set_connected(self, value):
         if self.connected != value:
             self.connected = value
+            log.info("Server: %s", "připojeno" if value else "odpojeno")
             if not value:
                 self.phones = 0
                 self.on_event("clients", 0)
