@@ -35,6 +35,10 @@ DEFAULTS = {
     "key_delay_ms": 8,
     # kód se zároveň vloží do schránky (Ctrl+V)
     "clipboard": True,
+    # tabulka EAN → název (.xlsx / .csv); prázdné = vepisuje se EAN
+    "products_file": "",
+    # s načtenou tabulkou vepisovat název produktu místo EANu
+    "write_name": True,
 }
 
 
@@ -51,7 +55,7 @@ class Config:
         data = {}
         if CONFIG_FILE.exists():
             try:
-                data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+                data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))  # snese i BOM z Poznámkového bloku
             except (OSError, ValueError):
                 data = {}
         for key in OBSOLETE_KEYS:

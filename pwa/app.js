@@ -247,11 +247,15 @@ function onAck(msg) {
   if (!entry) return;
   state.pending.delete(msg.id);
   clearTimeout(entry.timer);
-  entry.status = msg.ok ? 'ok' : 'err';
-  entry.info = msg.ok ? (msg.target ? `Vepsáno → ${msg.target}` : 'Vepsáno') : msg.error;
+  entry.status = !msg.ok ? 'err' : msg.warn ? 'warn' : 'ok';
+  entry.name = msg.name || '';
+  const where = msg.target ? ` → ${msg.target}` : '';
+  if (!msg.ok) entry.info = msg.error;
+  else if (msg.warn) entry.info = `${msg.warn}, vepsán EAN${where}`;
+  else entry.info = `${msg.name ? 'Vepsán název' : 'Vepsáno'}${where}`;
   renderHistory();
-  showLast(entry.code, entry.info, entry.status);
-  beep(msg.ok); flash(msg.ok);
+  showLast(entry.code, entry.info, entry.status, entry.name);
+  beep(msg.ok && !msg.warn); flash(msg.ok && !msg.warn);
 }
 
 function failPending(reason) {
@@ -264,9 +268,11 @@ function failPending(reason) {
 }
 
 // ---------- UI ----------
-function showLast(code, info, cls) {
+function showLast(code, info, cls, name) {
   $('last').className = 'last ' + (cls || '');
   $('lastCode').textContent = code;
+  $('lastName').textContent = name || '';
+  $('lastName').hidden = !name;
   $('lastInfo').textContent = info;
 }
 
@@ -283,17 +289,26 @@ function renderHistory() {
     const li = document.createElement('li');
     li.className = e.status;
     const time = new Date(e.at).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const main = document.createElement('span');
+    main.className = 'main';
     const code = document.createElement('span');
     code.className = 'code'; code.textContent = e.code;
+    main.append(code);
+    if (e.name) {
+      const name = document.createElement('span');
+      name.className = 'name'; name.textContent = e.name;
+      main.append(name);
+    }
     const meta = document.createElement('span');
     meta.className = 'meta';
-    meta.textContent = (e.status === 'pending' ? '…' : e.status === 'ok' ? '✓ ' : '✗ ') + time;
-    li.append(code, meta);
+    const mark = { pending: '…', ok: '✓ ', warn: '⚠ ' }[e.status] || '✗ ';
+    meta.textContent = mark + time;
+    li.append(main, meta);
     li.onclick = () => { unlockAudio(); sendCode(e.code); };
     ul.appendChild(li);
   });
-  store.set('ean.history', JSON.stringify(state.history.map(({ code, status, at, info }) =>
-    ({ code, status: status === 'pending' ? 'err' : status, at, info }))));
+  store.set('ean.history', JSON.stringify(state.history.map(({ code, status, at, info, name }) =>
+    ({ code, status: status === 'pending' ? 'err' : status, at, info, name }))));
 }
 
 function showPairing(needed) {

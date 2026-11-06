@@ -34,6 +34,27 @@ Odinstalace: *Nastavení → Aplikace → EAN Agent → Odinstalovat*.
 
 Stejný kód se znovu pošle až po 2 s bez záběru, takže se jeden produkt nenačte vícekrát omylem. Pro další kus stačí kód na chvíli oddálit a znovu namířit, nebo klepnout na kód v posledních kódech.
 
+## Název produktu místo EANu (tabulka produktů)
+
+Agent umí místo čísla EAN vepsat rovnou **název produktu** z tabulky. Tabulka zůstává jen na PC, telefon ani server ji nevidí.
+
+1. V okně agenta klikni na **Vybrat tabulku…** (nebo v menu ikony *Vybrat tabulku produktů…*) a vyber soubor `.xlsx` nebo `.csv`.
+2. Tabulka musí mít sloupec **EAN** a sloupec **Název**. Agent je pozná podle záhlaví, a když záhlaví chybí, podle obsahu. Ostatní sloupce se ignorují a použije se první list sešitu.
+3. Nech zapnuté **Vepisovat název místo EANu**. V okně uvidíš, kolik produktů se načetlo.
+
+Co se vepíše:
+
+| Situace | Do Abry se vepíše | Telefon ukáže |
+|---|---|---|
+| EAN je v tabulce | název produktu | zeleně název |
+| EAN v tabulce není | EAN | oranžově „EAN není v tabulce produktů“ |
+| EAN má v tabulce víc různých názvů | EAN | oranžově „EAN má v tabulce víc názvů“ |
+| Tabulka nejde načíst (smazaná, poškozená) | EAN | oranžově důvod |
+
+- EANy s víc názvy ukáže tlačítko **Sporné EANy** v okně agenta. Oprav je v tabulce, aby měl každý EAN jen jeden název.
+- Když tabulku upravíš a uložíš, agent ji do pár sekund načte znovu sám. Restart není potřeba.
+- Do schránky jde to samé, co se vepsalo.
+
 ## Nabídka v oznamovací oblasti (pravé tlačítko na ikoně)
 
 | Položka | K čemu |
@@ -42,7 +63,9 @@ Stejný kód se znovu pošle až po 2 s bez záběru, takže se jeden produkt ne
 | Pozastavit příjem | telefon zobrazí „pozastaveno“ a nic se nevepíše |
 | Po vepsání kódu | Nic (výchozí) / Enter / Tab |
 | Způsob psaní | *Znaky* (výchozí). Když Abra běží přes **vzdálenou plochu** a kódy nedorazí, přepni na *Numerická klávesnice*. *Nepsat, jen zkopírovat do schránky* kód nikam nevepíše, vložíš ho sám přes Ctrl+V. |
-| Kopírovat kód do schránky | zapnuto: každý kód jde navíc do schránky |
+| Kopírovat kód do schránky | zapnuto: každý kód (nebo název) jde navíc do schránky |
+| Vepisovat název produktu místo EANu | zapnuto: s vybranou tabulkou se vepisuje název |
+| Vybrat tabulku produktů… | výběr souboru `.xlsx` / `.csv` s EAN a názvy |
 | Zrušit spárování všech telefonů | vygeneruje nový klíč, staré telefony se odpojí a je potřeba naskenovat nový QR |
 
 ## Když něco nefunguje
@@ -63,6 +86,7 @@ python -m venv .venv
 .venv\Scripts\pip install -r agent\requirements.txt
 .venv\Scripts\python agent\main.py          # spuštění agenta
 .venv\Scripts\python tools\selftest.py      # test běžícího agenta přes relay (otevře testovací okno)
+.venv\Scripts\python tools\test_products.py [tabulka.xlsx]   # offline test načítání tabulky produktů
 build.bat                                   # sestaví dist\EanAgent\ a instalátor dist\EanAgent-Setup-<verze>.exe
 ```
 

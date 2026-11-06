@@ -16,8 +16,9 @@ MAX_AGE_S = 60  # starší zprávy se zahodí (ochrana proti přehrání)
 
 
 class RelayClient:
-    def __init__(self, cfg, on_event):
+    def __init__(self, cfg, on_event, products=None):
         self.cfg = cfg
+        self.products = products  # ProductTable, nebo None
         self.on_event = on_event  # callback(event:str, data) – volá se z vlákna klienta
         self.paused = False
         self.connected = False
@@ -107,15 +108,29 @@ class RelayClient:
             return {**ack, "ok": False, "error": "Neplatný EAN kód"}
         if self.paused:
             return {**ack, "ok": False, "error": "Příjem na PC je pozastaven"}
+        text, extra = await self.loop.run_in_executor(self.typing, self._text_for, code)
         try:
             target = await self.loop.run_in_executor(
-                self.typing, typer.type_code, code,
+                self.typing, typer.type_code, text,
                 self.cfg["typing_mode"], self.cfg["suffix"], self.cfg["key_delay_ms"],
                 self.cfg["clipboard"])
         except OSError as e:
             return {**ack, "ok": False, "error": str(e)}
-        self.on_event("scan", {"code": code, "target": target})
-        return {**ack, "ok": True, "target": target}
+        self.on_event("scan", {"code": code, "target": target, "text": text, **extra})
+        return {**ack, "ok": True, "target": target, "typed": text, **extra}
+
+    def _text_for(self, code):
+        """Co vepsat: název z tabulky, jinak EAN (s upozorněním pro telefon)."""
+        if not (self.products and self.cfg["products_file"] and self.cfg["write_name"]):
+            return code, {}
+        found = self.products.lookup(code)
+        if found.status == "ok":
+            return found.name, {"name": found.name}
+        if self.products.error:
+            return code, {"warn": self.products.error}
+        if found.status == "ambiguous":
+            return code, {"warn": f"EAN má v tabulce víc názvů ({len(found.names)})"}
+        return code, {"warn": "EAN není v tabulce produktů"}
 
     async def _send(self, obj):
         if self.ws is None or self.ws.closed:

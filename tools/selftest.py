@@ -3,6 +3,9 @@
 Spuštění (agent musí běžet a být připojený k relay):
     python tools/selftest.py                # relay z data/config.json
     python tools/selftest.py http://localhost:8787
+
+Když má agent typing_mode "off" a clipboard false, nic se nevepisuje ani nekopíruje
+a test kontroluje jen to, co agent hlásí, že by vepsal (bezpečné i při práci na PC).
 """
 import asyncio
 import json
@@ -18,11 +21,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "agent"))
 import typer  # noqa: E402
 from config import Config  # noqa: E402
 from crypto_box import Box, new_key  # noqa: E402
+from products import ProductTable  # noqa: E402
 
 cfg = Config()
 RELAY = (sys.argv[1] if len(sys.argv) > 1 else cfg["relay_url"]).rstrip("/")
 WS = RELAY.replace("https://", "wss://").replace("http://", "ws://")
 box = Box(cfg["room"], cfg["key"])
+DRY = cfg["typing_mode"] == "off" and not cfg["clipboard"]
 results = []
 
 
@@ -58,7 +63,12 @@ async def next_msg(ws, want="ack", timeout=3.0):
 
 
 def test_window_focused():
-    return typer.foreground_title() == "EAN selftest"
+    return DRY or typer.foreground_title() == "EAN selftest"
+
+
+def typed_ok(expected_total, ack_typed, expected_typed):
+    """Bez psaní stačí, že agent hlásí správný text; jinak musí sedět i testovací okno."""
+    return ack_typed == expected_typed and (DRY or expected_total())
 
 
 async def run(entry_value, clipboard_value):
@@ -97,14 +107,48 @@ async def run(entry_value, clipboard_value):
             await ws.send_str(msg)
             ack = await next_msg(ws, timeout=5)
             check("platný kód přijat", bool(ack) and ack["ok"] is True, f"okno: {(ack or {}).get('target')}")
+            typed = (ack or {}).get("typed", "")
             await asyncio.sleep(0.5)
-            check("kód vepsán do testovacího okna", entry_value() == "4006381333931", repr(entry_value()))
+            check("vepsán EAN (není v tabulce)",
+                  typed_ok(lambda: entry_value() == typed, typed, "4006381333931"),
+                  f"{typed!r} {(ack or {}).get('warn', '')}")
             if cfg["clipboard"]:
-                check("kód ve schránce", clipboard_value() == "4006381333931", repr(clipboard_value()))
+                check("kód ve schránce", clipboard_value() == typed, repr(clipboard_value()))
 
             await ws.send_str(msg)
             check("stejná zpráva podruhé ignorována", await next_msg(ws, timeout=2) is None)
-            check("vepsáno jen jednou", entry_value() == "4006381333931", repr(entry_value()))
+            if not DRY:
+                check("vepsáno jen jednou", entry_value() == typed, repr(entry_value()))
+
+            if cfg["products_file"] and cfg["write_name"]:
+                await products_tests(ws, entry_value, clipboard_value, "" if DRY else typed)
+
+
+async def products_tests(ws, entry_value, clipboard_value, before):
+    table = ProductTable()
+    table.set_path(cfg["products_file"])
+    known = next(((ean, names[0]) for ean, names in table._names.items() if len(set(names)) == 1), None)
+    amb = table.ambiguous()
+    if not test_window_focused():
+        print("SKIP tabulka – fokus má jiné okno, kód se neposílá")
+        return
+    ean, name = known
+    await ws.send_str(sealed({"type": "scan", "code": ean, "id": "p1"}))
+    ack = await next_msg(ws, timeout=5) or {}
+    await asyncio.sleep(0.5 + len(name) * 0.02)
+    check("z tabulky vepsán název",
+          ack.get("name") == name and typed_ok(lambda: entry_value() == before + name, ack.get("typed"), name),
+          f"{ean} → {ack.get('typed')!r}")
+    if cfg["clipboard"]:
+        check("název ve schránce", clipboard_value() == name, repr(clipboard_value()))
+    if amb:
+        before = entry_value()
+        await ws.send_str(sealed({"type": "scan", "code": amb[0][0], "id": "p2"}))
+        ack = await next_msg(ws, timeout=5) or {}
+        await asyncio.sleep(0.5)
+        check("sporný EAN: vepsán EAN + upozornění",
+              typed_ok(lambda: entry_value() == before + amb[0][0], ack.get("typed"), amb[0][0])
+              and "víc názvů" in ack.get("warn", ""), f"{ack.get('typed')!r} {ack.get('warn', '')}")
 
 
 def main():

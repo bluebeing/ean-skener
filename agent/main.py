@@ -5,7 +5,8 @@ import socket
 import sys
 import threading
 import tkinter as tk
-from tkinter import messagebox
+from pathlib import Path
+from tkinter import filedialog, messagebox
 from urllib.parse import urlparse
 
 import pystray
@@ -14,10 +15,12 @@ from PIL import Image, ImageTk
 
 import updater
 from config import Config, resource_dir
+from products import ProductTable
 from relay_client import RelayClient
 from version import __version__
 
-BG, FG, MUTED, ACCENT, WARN = "#0f1115", "#e8eaed", "#9aa0a6", "#3ddc84", "#fbbc04"
+BG, FG, MUTED, ACCENT, WARN, PANEL = "#0f1115", "#e8eaed", "#9aa0a6", "#3ddc84", "#fbbc04", "#181b21"
+PRODUCTS_CHECK_MS = 5000
 FIRST_UPDATE_CHECK_MS = 30_000
 UPDATE_CHECK_MS = 6 * 3600_000
 ERROR_ALREADY_EXISTS = 183
@@ -41,14 +44,17 @@ class App:
         self.update_status = ""  # text pro tray menu
         self.updating = False
 
+        self.products = ProductTable()
         self.root = tk.Tk()
         self.root.withdraw()
-        self.client = RelayClient(self.cfg, lambda ev, data: self.events.put((ev, data)))
+        self.client = RelayClient(self.cfg, lambda ev, data: self.events.put((ev, data)), self.products)
         self._build_window()
         self._build_tray()
         if self.cfg["relay_url"]:
             self.client.start()
+        self._load_products(self.cfg["products_file"])
         self.root.after(150, self._poll_events)
+        self.root.after(PRODUCTS_CHECK_MS, self._check_products)
         if updater.can_update():
             self.root.after(FIRST_UPDATE_CHECK_MS, self._scheduled_update_check)
 
@@ -76,6 +82,24 @@ class App:
         self.url_lbl = tk.Label(r, font=("Consolas", 9), bg=BG, fg=MUTED)
         self.url_lbl.pack()
         self._refresh_qr()
+
+        prod = tk.Frame(r, bg=PANEL, padx=12, pady=8)
+        prod.pack(fill="x", padx=20, pady=(12, 0))
+        tk.Label(prod, text="Tabulka produktů", font=("Segoe UI Semibold", 10), bg=PANEL, fg=FG).pack(anchor="w")
+        self.prod_lbl = tk.Label(prod, font=("Segoe UI", 9), bg=PANEL, fg=MUTED, wraplength=420, justify="left")
+        self.prod_lbl.pack(anchor="w")
+        buttons = tk.Frame(prod, bg=PANEL)
+        buttons.pack(anchor="w", pady=(6, 0))
+        button = dict(font=("Segoe UI", 9), bg=BG, fg=FG, activebackground=BG, activeforeground=FG,
+                      relief="flat", padx=10, pady=2, cursor="hand2")
+        tk.Button(buttons, text="Vybrat tabulku…", command=self.choose_products, **button).pack(side="left")
+        self.amb_btn = tk.Button(buttons, text="Sporné EANy", command=self.show_ambiguous, **button)
+        self.name_var = tk.BooleanVar(value=self.cfg["write_name"])
+        self.name_chk = tk.Checkbutton(buttons, text="Vepisovat název místo EANu", variable=self.name_var,
+                                       command=lambda: self._set("write_name", self.name_var.get()),
+                                       font=("Segoe UI", 9), bg=PANEL, fg=FG, selectcolor=BG,
+                                       activebackground=PANEL, activeforeground=FG)
+        self.name_chk.pack(side="left", padx=(10, 0))
 
         self.last_lbl = tk.Label(r, text="Zatím nic nenaskenováno", font=("Segoe UI", 11),
                                  bg=BG, fg=MUTED, wraplength=440)
@@ -145,6 +169,13 @@ class App:
             pystray.MenuItem("Kopírovat kód do schránky (Ctrl+V)",
                              ui(lambda: self._set("clipboard", not self.cfg["clipboard"])),
                              checked=lambda item: self.cfg["clipboard"]),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Vepisovat název produktu místo EANu",
+                             ui(lambda: self._set("write_name", not self.cfg["write_name"])),
+                             checked=lambda item: self.cfg["write_name"],
+                             enabled=lambda item: bool(self.cfg["products_file"])),
+            pystray.MenuItem("Vybrat tabulku produktů…", ui(self.choose_products)),
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem("Zrušit spárování všech telefonů", ui(self.reset_pairing)),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(lambda item: f"Verze {__version__}" + (f" – {self.update_status}"
@@ -162,6 +193,78 @@ class App:
     def _set(self, key, value):
         self.cfg.set(key, value)
         self.icon.update_menu()
+        if key == "write_name":
+            self.name_var.set(value)
+
+    # ---------- tabulka produktů ----------
+    def choose_products(self):
+        self.show_window()
+        current = self.cfg["products_file"]
+        path = filedialog.askopenfilename(
+            parent=self.root, title="Tabulka produktů (EAN a název)",
+            initialdir=str(Path(current).parent) if current else str(Path.home() / "Downloads"),
+            filetypes=[("Tabulky", "*.xlsx *.xlsm *.csv"), ("Všechny soubory", "*.*")])
+        if not path:
+            return
+        self.cfg.set("products_file", str(Path(path)))
+        self._load_products(self.cfg["products_file"])
+        self.icon.update_menu()
+
+    def _load_products(self, path):
+        """Načtení (u velkého Excelu i pár sekund) běží mimo UI vlákno."""
+        self.prod_lbl.configure(text="Načítám tabulku…" if path else "", fg=MUTED)
+
+        def work():
+            self.products.set_path(path)
+            self.events.put(("ui", self._refresh_products_ui))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _check_products(self):
+        """Hlídá změny souboru s tabulkou, aby se po uložení v Excelu hned použila nová data."""
+        if self.stopped:
+            return
+        if self.cfg["products_file"]:
+            def work():
+                before = (self.products.count(), self.products.error)
+                self.products.reload_if_changed()
+                if (self.products.count(), self.products.error) != before:
+                    self.events.put(("ui", self._refresh_products_ui))
+            threading.Thread(target=work, daemon=True).start()
+        self.root.after(PRODUCTS_CHECK_MS, self._check_products)
+
+    def _refresh_products_ui(self):
+        path = self.cfg["products_file"]
+        ambiguous = self.products.ambiguous()
+        if not path:
+            text, color = "Není vybraná. Vepisuje se EAN.", MUTED
+        elif self.products.error:
+            text, color = f"{Path(path).name}: {self.products.error}. Vepisuje se EAN.", WARN
+        else:
+            text = f"{Path(path).name} · {self.products.count()} produktů"
+            if ambiguous:
+                text += f" · {len(ambiguous)} EANů s víc názvy (vepíše se u nich EAN)"
+            color = ACCENT if self.cfg["write_name"] else MUTED
+        self.prod_lbl.configure(text=text, fg=color)
+        if ambiguous and not self.products.error:
+            self.amb_btn.pack(side="left", padx=(8, 0), before=self.name_chk)
+        else:
+            self.amb_btn.pack_forget()
+        self.name_chk.configure(state="normal" if path else "disabled")
+
+    def show_ambiguous(self):
+        items = self.products.ambiguous()
+        win = tk.Toplevel(self.root)
+        win.title("EANy s víc názvy")
+        win.configure(bg=BG)
+        tk.Label(win, text="U těchto EANů se vepíše EAN. Oprav je v tabulce a ulož, agent ji načte sám.",
+                 font=("Segoe UI", 9), bg=BG, fg=MUTED, wraplength=520, justify="left").pack(
+            anchor="w", padx=12, pady=(10, 4))
+        text = tk.Text(win, width=80, height=min(24, 3 * len(items) + 1), font=("Consolas", 9),
+                       bg=PANEL, fg=FG, relief="flat", padx=8, pady=6)
+        for ean, names in items:
+            text.insert("end", ean + "\n" + "".join(f"   {n}\n" for n in names))
+        text.configure(state="disabled")
+        text.pack(padx=12, pady=(0, 12), fill="both", expand=True)
 
     def toggle_pause(self):
         self.client.set_paused(not self.client.paused)
@@ -244,7 +347,10 @@ class App:
                     self._update_status()
                 elif ev == "scan":
                     where = f" → {data['target']}" if data["target"] else ""
-                    self.last_lbl.configure(text=f"Poslední kód: {data['code']}{where}", fg=FG)
+                    what = f"{data['code']} = {data['name']}" if data.get("name") else data["code"]
+                    note = f"\n⚠ {data['warn']}" if data.get("warn") else ""
+                    self.last_lbl.configure(text=f"Poslední kód: {what}{where}{note}",
+                                            fg=WARN if data.get("warn") else FG)
         except queue.Empty:
             pass
         self.root.after(150, self._poll_events)

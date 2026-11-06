@@ -53,6 +53,9 @@ main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .last-info { color: var(--muted); font-size: 14px; margin-top: 2px; }
 .last.ok { border-color: var(--ok); } .last.ok .last-info { color: var(--ok); }
 .last.err { border-color: var(--err); } .last.err .last-info { color: var(--err); }
+.last.warn { border-color: var(--warn); } .last.warn .last-info { color: var(--warn); }
+.last-name { font-size: 17px; font-weight: 600; margin-top: 4px; }
+.last-name[hidden] { display: none; }
 .actions { display: flex; gap: 10px; margin-top: 12px; }
 .actions button { flex: 1; }
 .actions button[hidden] { display: none; }
@@ -60,6 +63,9 @@ h2 { font-size: 15px; margin: 20px 0 8px; } h2 small { color: var(--muted); font
 #history { list-style: none; margin: 0; padding: 0; }
 #history li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 4px;
   border-bottom: 1px solid var(--line); cursor: pointer; }
+#history .main { display: flex; flex-direction: column; min-width: 0; }
 #history .code { font-family: ui-monospace, Consolas, monospace; }
+#history .name { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#history .warn .meta { color: var(--warn); }
 #history .meta { font-size: 13px; color: var(--muted); text-align: right; }
 #history .ok .meta { color: var(--ok); } #history .err .meta { color: var(--err); }
