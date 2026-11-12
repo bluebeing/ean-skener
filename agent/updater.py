@@ -1,8 +1,11 @@
 """Automatické aktualizace z GitHub Releases.
 
-Agent si jednou za čas zjistí nejnovější vydání, stáhne instalátor, ověří jeho SHA-256
-a spustí ho potichu. Instalátor agenta ukončí, přepíše a znovu spustí; data (párování) zůstanou.
+Agent si jednou za čas zjistí nejnovější vydání, ověří podpis Ed25519 (soukromý klíč má jen
+autor, viz tools/sign_release.py), stáhne instalátor, ověří jeho SHA-256 a spustí ho potichu.
+Instalátor agenta ukončí, přepíše a znovu spustí; data (párování) zůstanou.
+Nepodepsané nebo jinak podezřelé vydání se nenainstaluje.
 """
+import base64
 import hashlib
 import json
 import os
@@ -13,12 +16,36 @@ import tempfile
 import urllib.error
 import urllib.request
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
 from version import __version__
 
 REPO = "bluebeing/ean-skener"
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
-ASSET_RE = re.compile(r"^EanAgent-Setup-[\d.]+\.exe$")
+DOWNLOAD_PREFIX = f"https://github.com/{REPO}/releases/download/"
+ASSET_RE = re.compile(r"^EanAgent-Setup-(\d+\.\d+\.\d+)\.exe$")
+SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 HEADERS = {"User-Agent": f"EanAgent/{__version__}", "Accept": "application/vnd.github+json"}
+# veřejná část podpisového klíče vydání (soukromá je jen u autora mimo repozitář)
+RELEASE_PUBLIC_KEY = "LeQPL8hpLGoJKzA8RY/Wp9NHhGBRdKyK5RejELkxBiI="
+
+
+class UpdateRejected(Exception):
+    """Vydání nesplňuje bezpečnostní kontroly – neinstaluje se."""
+
+
+def signed_message(name: str, sha256_hex: str) -> bytes:
+    # musí odpovídat tools/sign_release.py
+    return f"ean-skener-release\n{name}\n{sha256_hex.lower()}\n".encode()
+
+
+def verify_signature(name: str, sha256_hex: str, signature_b64: str, public_key_b64=RELEASE_PUBLIC_KEY):
+    try:
+        key = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key_b64))
+        key.verify(base64.b64decode(signature_b64.strip(), validate=True), signed_message(name, sha256_hex))
+    except (InvalidSignature, ValueError) as e:
+        raise UpdateRejected(f"Neplatný podpis vydání {name}") from e
 
 
 def _parse(version: str):
@@ -44,20 +71,40 @@ def check():
         if e.code == 404:  # zatím žádné vydání
             return None
         raise
-    latest = release.get("tag_name", "")
-    if _parse(latest) <= _parse(__version__):
+    latest = str(release.get("tag_name", ""))
+    if not re.fullmatch(r"v?\d+\.\d+\.\d+", latest) or _parse(latest) <= _parse(__version__):
         return None
+    version = latest.lstrip("v")
     assets = release.get("assets", [])
-    setup = next((a for a in assets if ASSET_RE.match(a.get("name", ""))), None)
+    setup = next((a for a in assets if ASSET_RE.match(str(a.get("name", "")))), None)
     if not setup:
         return None
-    digest = (setup.get("digest") or "").removeprefix("sha256:")
+    name = setup["name"]
+    url = str(setup.get("browser_download_url", ""))
+    if ASSET_RE.match(name).group(1) != version:
+        raise UpdateRejected(f"Instalátor {name} nepatří k vydání {latest}")
+    if url != f"{DOWNLOAD_PREFIX}{latest}/{name}":
+        raise UpdateRejected(f"Neočekávaná adresa instalátoru: {url}")
+
+    digest = str(setup.get("digest") or "").removeprefix("sha256:").lower()
     if not digest:  # záloha: kontrolní součet jako samostatný soubor vydání
-        sums = next((a for a in assets if a.get("name") == setup["name"] + ".sha256"), None)
-        if not sums:
-            return None
-        digest = _get(sums["browser_download_url"]).decode().split()[0]
-    return latest.lstrip("v"), setup["browser_download_url"], digest.lower()
+        sums = _asset(assets, latest, name + ".sha256")
+        digest = _get(sums).decode().split()[0].lower()
+    if not SHA_RE.match(digest):
+        raise UpdateRejected("Neplatný kontrolní součet vydání")
+    signature = _get(_asset(assets, latest, name + ".sig")).decode("ascii")
+    verify_signature(name, digest, signature)  # bez platného podpisu se nic nestáhne
+    return version, url, digest
+
+
+def _asset(assets, tag, name):
+    asset = next((a for a in assets if a.get("name") == name), None)
+    if not asset:
+        raise UpdateRejected(f"Vydání {tag} nemá soubor {name}")
+    url = str(asset.get("browser_download_url", ""))
+    if url != f"{DOWNLOAD_PREFIX}{tag}/{name}":
+        raise UpdateRejected(f"Neočekávaná adresa souboru: {url}")
+    return url
 
 
 def download(url, sha256, progress=None) -> str:
@@ -65,7 +112,10 @@ def download(url, sha256, progress=None) -> str:
 
     progress(procenta) se volá průběžně; na pomalé síti může stahování trvat i minuty.
     """
-    path = os.path.join(tempfile.gettempdir(), url.rsplit("/", 1)[-1])
+    name = url.rsplit("/", 1)[-1]
+    if not url.startswith(DOWNLOAD_PREFIX) or not ASSET_RE.match(name):
+        raise UpdateRejected(f"Neočekávaná adresa instalátoru: {url}")  # žádné ..\ v cestě
+    path = os.path.join(tempfile.gettempdir(), name)
     part = path + ".part"
     digest = hashlib.sha256()
     req = urllib.request.Request(url, headers=HEADERS)

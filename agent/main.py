@@ -114,7 +114,10 @@ class App:
         tk.Label(r, text="Zavřením okna agent běží dál v oznamovací oblasti (u hodin).",
                  font=("Segoe UI", 9), bg=BG, fg=MUTED).pack(pady=(0, 14))
         self._update_status()
-        r.deiconify()
+        # Párovací QR (= klíč) ukázat po startu jen dokud se nepřipojil žádný telefon.
+        # Jinak by se objevoval při každém přihlášení, třeba i při sdílení obrazovky.
+        if not self.cfg["paired"]:
+            r.deiconify()
 
     def _refresh_qr(self):
         if not self.cfg["relay_url"]:
@@ -366,6 +369,8 @@ class App:
                 elif ev == "clients":
                     self.clients = data
                     self._update_status()
+                    if data and not self.cfg["paired"]:
+                        self.cfg.set("paired", True)
                 elif ev == "scan":
                     where = f" → {data['target']}" if data["target"] else ""
                     what = f"{data['code']} = {data['name']}" if data.get("name") else data["code"]

@@ -1,0 +1,10 @@
+# Bezpečnostní hlavičky (Cloudflare Workers Static Assets)
+# CSP: jen vlastní skripty (žádné inline ani javascript: URL), WebAssembly pro čtečku ZXing,
+# spojení jen na vlastní relay. Lokální ws:// je pro vývoj přes wrangler dev.
+/*
+  Content-Security-Policy: default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss://ean-skener.blue-kolman.workers.dev ws://127.0.0.1:8787 ws://localhost:8787; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(self), microphone=(), geolocation=(), payment=(), usb=()
+  Cross-Origin-Opener-Policy: same-origin

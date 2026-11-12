@@ -5,6 +5,7 @@ import { DurableObject } from 'cloudflare:workers';
 const ROOM_RE = /^[A-Za-z0-9_-]{22,64}$/;
 const ROLES = ['pc', 'phone'];
 const MAX_MESSAGE = 4096;
+const MAX_PHONES = 10; // víc telefonů v jedné místnosti nedává smysl – ochrana před zahlcením
 
 export default {
   async fetch(request, env) {
@@ -27,6 +28,9 @@ export default {
 export class Room extends DurableObject {
   async fetch(request) {
     const role = new URL(request.url).searchParams.get('role');
+    if (role === 'phone' && this.ctx.getWebSockets('phone').length >= MAX_PHONES) {
+      return new Response('Příliš mnoho připojených telefonů', { status: 429 });
+    }
     if (role === 'pc') {
       // v místnosti je vždy jen jedno PC, nové nahradí staré
       for (const old of this.ctx.getWebSockets('pc')) old.close(4000, 'replaced');

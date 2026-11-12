@@ -12,7 +12,9 @@ from dataclasses import dataclass, field
 EAN_HEADERS = ("ean", "čárový kód", "carovy kod", "barcode", "gtin")
 NAME_HEADERS = ("název", "nazev", "name", "produkt", "product", "zboží", "zbozi")
 DIGITS_RE = re.compile(r"^\d{8,14}$")
-CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]+")
+# řídicí znaky (Tab, Enter…) a neviditelné obousměrné značky se nesmí dostat do vepisovaného textu
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f​-‏‪-‮⁦-⁩﻿]+")
+MAX_NAME = 200  # delší buňka je skoro jistě chyba v tabulce – nevepisovat ji celé minuty
 
 
 def normalize(code: str) -> str:
@@ -32,7 +34,9 @@ def _cell_to_code(value):
 
 
 def _clean_name(value):
-    return CONTROL_RE.sub(" ", str(value)).strip() if value is not None else ""
+    if value is None:
+        return ""
+    return re.sub(r"\s+", " ", CONTROL_RE.sub(" ", str(value))).strip()[:MAX_NAME].rstrip()
 
 
 @dataclass
@@ -65,7 +69,8 @@ class ProductTable:
             if not self.path:
                 return
             try:
-                mtime = os.stat(self.path).st_mtime
+                st = os.stat(self.path)
+                mtime = (st.st_mtime_ns, st.st_size)  # i velikost – dvě uložení během jednoho „tiku“ hodin
             except OSError:
                 self.error = "Soubor s tabulkou nebyl nalezen"
                 self._names = {}

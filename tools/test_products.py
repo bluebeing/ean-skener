@@ -39,8 +39,8 @@ with tempfile.TemporaryDirectory() as tmp:
     p = write(tmp, "b.csv", "8594001234561,Bez záhlaví\n")
     t.set_path(p)
     check("CSV bez záhlaví", t.lookup("8594001234561").name == "Bez záhlaví", t.error)
-    os.utime(p, (1, 1))
     write(tmp, "b.csv", "8594001234561,Změněný název\n")
+    os.utime(p, (2_000_000_000, 2_000_000_000))  # jiný čas úpravy i při velmi rychlém přepsání
     check("po uložení se tabulka načte znovu", t.lookup("8594001234561").name == "Změněný název")
 
     t.set_path(os.path.join(tmp, "neexistuje.xlsx"))

@@ -115,7 +115,18 @@ build.bat                                   # sestaví dist\EanAgent\ a instalá
 .\release.ps1 1.0.1 "Co je nového"
 ```
 
-Skript nastaví verzi v `agent/version.py`, sestaví instalátor, commitne, vytvoří tag `v1.0.1` a nahraje GitHub Release s instalátorem a kontrolním součtem `.sha256`.
+Skript nastaví verzi v `agent/version.py`, sestaví instalátor, **podepíše ho**, commitne, vytvoří tag `v1.0.1` a nahraje GitHub Release s instalátorem, kontrolním součtem `.sha256` a podpisem `.sig`.
+
+**Podpisový klíč vydání** je v `%USERPROFILE%\.ean-skener\release-ed25519.pem`, mimo repozitář. Agent nainstaluje jen aktualizaci podepsanou tímto klíčem. **Klíč si zazálohuj** (např. do správce hesel) a nikam ho nenahrávej. Bez něj už nepůjde vydat aktualizaci, kterou si agenti nainstalují sami. Nové vydání by se pak muselo nainstalovat ručně, s novým veřejným klíčem v `agent/updater.py`.
+
+## Zabezpečení
+
+- **Šifrování end-to-end** (AES-256-GCM). Klíč je jen v párovacím QR kódu a nikdy neopustí telefon a PC. Server vidí jen zašifrovaná data, ID místnosti a počet připojených zařízení. Zprávy jsou svázané se směrem a místností, PC zahazuje zprávy starší než 60 s i zopakované zprávy.
+- **PC vepíše jen** platný EAN (kontrolní číslice) nebo název z vlastní tabulky. Šarže smí obsahovat jen písmena a číslice. Žádné klávesové zkratky ani libovolný text.
+- **Aktualizace** se instalují jen s platným podpisem Ed25519 a jen ze správné adresy na GitHubu, takže ani převzetí GitHub účtu nestačí k podvržení aktualizace.
+- **Aplikace pro telefon** má přísnou Content Security Policy. Párovací QR se přijme jen pro vlastní server a přepárování na jiné PC je nutné potvrdit.
+- **Párovací QR** se po prvním spárování už neukazuje při každém startu. Zobrazíš ho přes menu ikony. Kdo QR naskenuje, může do PC posílat kódy, takže ho neukazuj při sdílení obrazovky. Když unikne, použij *Zrušit spárování všech telefonů*.
+- Bezpečnostní testy: `.venv\Scripts\python tools\test_security.py [http://127.0.0.1:8787]`
 
 **Relay server (`relay/`)** je Cloudflare Worker s Durable Objects. Servíruje PWA z `pwa/` a přeposílá zprávy mezi telefonem a PC v „místnostech“.
 

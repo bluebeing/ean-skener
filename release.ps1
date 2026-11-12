@@ -21,6 +21,9 @@ if ($LASTEXITCODE -ne 0) { throw "Sestavení selhalo" }
 $setup = "dist\EanAgent-Setup-$Version.exe"
 $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
 "$hash  EanAgent-Setup-$Version.exe" | Set-Content -Encoding ascii -NoNewline "$setup.sha256"
+# podpis Ed25519 – agent nainstaluje jen podepsané vydání (klíč v %USERPROFILE%\.ean-skener)
+& .venv\Scripts\python tools\sign_release.py $setup
+if ($LASTEXITCODE -ne 0) { throw "Podpis instalátoru selhal (chybí podpisový klíč?)" }
 
 git add agent\version.py
 git diff --cached --quiet
@@ -31,5 +34,5 @@ git tag "v$Version"
 git push origin HEAD "v$Version"
 
 if (-not $Notes) { $Notes = "EAN Agent $Version" }
-gh release create "v$Version" $setup "$setup.sha256" --title "EAN Agent $Version" --notes $Notes
+gh release create "v$Version" $setup "$setup.sha256" "$setup.sig" --title "EAN Agent $Version" --notes $Notes
 Write-Host "Vydáno: v$Version"

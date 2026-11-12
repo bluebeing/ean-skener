@@ -125,14 +125,32 @@ async function setPairing(pair) {
     : null;
 }
 
+function storedPairing() {
+  try {
+    const p = JSON.parse(store.get('ean.pair'));
+    return p && parsePairing(`#r=${p.room}&k=${p.key}`); // jen platný formát
+  } catch (e) {
+    return null;
+  }
+}
+
+// Přepárování na jiné PC (cizí QR nálepka, podvržený odkaz) musí uživatel potvrdit,
+// jinak by skeny mohly tiše odcházet někomu jinému.
+function confirmRepair(pair) {
+  const current = state.pair || storedPairing();
+  if (!current || (current.room === pair.room && current.key === pair.key)) return true;
+  return window.confirm('Telefon je už spárovaný s PC. Opravdu ho přepárovat podle tohoto QR kódu? '
+    + 'Kódy pak budou chodit na jiné PC.');
+}
+
 function readPairing() {
   const fromUrl = parsePairing(location.hash);
-  if (fromUrl) {
+  if (location.hash) history.replaceState(null, '', location.pathname); // klíč nenechávat v adrese
+  if (fromUrl && confirmRepair(fromUrl)) {
     store.set('ean.pair', JSON.stringify(fromUrl));
-    history.replaceState(null, '', location.pathname); // klíč nenechávat v adrese
     return fromUrl;
   }
-  try { return JSON.parse(store.get('ean.pair')); } catch (e) { return null; }
+  return storedPairing();
 }
 
 // ---------- spojení přes relay server ----------
@@ -434,21 +452,22 @@ function parseProductQr(raw) {
 function handleDetected(raw, format) {
   if (state.mode === 'pair') return handlePairQr(raw);
   const text = String(raw || '').trim();
-  let item;
+  let item = null;
   if (format === 'qr_code') {
     item = parseProductQr(text);
-    if (!item) return parsePairing(text) ? handlePairQr(text) : false; // i párovací QR jde naskenovat rovnou
+    if (!item && !parsePairing(text)) return false; // jiné QR kódy ignorovat
   } else {
     if (!eanValid(text)) return false;
     item = { code: text, lot: '' };
   }
   const now = Date.now();
   if (text === state.lastCode && now - state.lastCodeAt < SAME_CODE_COOLDOWN_MS) {
-    state.lastCodeAt = now; // dokud kód drží v záběru, znovu se neodešle
+    state.lastCodeAt = now; // dokud kód drží v záběru, znovu se neodešle (ani neptá)
     return true;
   }
   state.lastCode = text;
   state.lastCodeAt = now;
+  if (!item) return handlePairQr(text); // párovací QR jde naskenovat i v běžném režimu
   sendCode(item.code, item.lot);
   return true;
 }
@@ -458,10 +477,14 @@ function handlePairQr(raw) {
   try { url = new URL(raw); } catch (e) { return false; }
   const pair = parsePairing(url.hash);
   if (!pair) return false;
-  if (url.host !== location.host) {
-    location.href = url.href; // QR patří k jinému serveru
+  // Párovací QR musí vést přesně na tento server. Na adresu z QR se nikdy nenaviguje
+  // (QR s javascript: by jinak spustil kód v aplikaci a mohl ukrást párovací klíč).
+  if (url.origin !== location.origin) {
+    showLast('Cizí QR kód', 'Tento párovací QR nepatří k tomuto skeneru, ignoruji ho', 'err');
+    beep(false); flash(false);
     return true;
   }
+  if (state.mode !== 'pair' && !confirmRepair(pair)) return true;
   store.set('ean.pair', JSON.stringify(pair));
   state.mode = 'ean';
   $('camera').classList.remove('pairing');

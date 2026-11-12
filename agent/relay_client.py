@@ -15,6 +15,7 @@ import typer
 from crypto_box import Box, valid_code
 
 MAX_AGE_S = 60  # starší zprávy se zahodí (ochrana proti přehrání)
+MAX_MESSAGE = 4096  # stejný limit jako na relay serveru
 LOT_RE = re.compile(r"^[0-9A-Za-z]{1,20}$")  # šarže smí obsahovat jen písmena a číslice
 log = logging.getLogger("ean.relay")
 
@@ -62,6 +63,8 @@ class RelayClient:
                 except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as e:
                     log.warning("Spojení se serverem: %s", e or type(e).__name__)
                     self.on_event("error", str(e))
+                except Exception:  # cokoli jiného nesmí smyčku ukončit – agent by se už nepřipojil
+                    log.exception("Neočekávaná chyba spojení")
                 finally:
                     self.ws = None
                     self._set_connected(False)
@@ -73,31 +76,38 @@ class RelayClient:
 
     async def _receive(self, ws):
         async for msg in ws:
-            if msg.type != aiohttp.WSMsgType.TEXT:
+            if msg.type != aiohttp.WSMsgType.TEXT or len(msg.data) > MAX_MESSAGE:
                 continue
             try:
-                data = json.loads(msg.data)
-            except ValueError:
-                continue
-            if data.get("t") == "peer":
-                phones = int(data.get("phones", 0))
-                if phones > self.phones:
-                    await self._send_status()
-                self.phones = phones
-                self.on_event("clients", phones)
-            elif data.get("t") == "msg":
-                inner = self.box.open(str(data.get("d", "")), "p2c")
-                if inner is None or not self._fresh(inner):
-                    continue  # cizí, poškozená nebo přehraná zpráva
-                if inner.get("type") == "scan":
-                    await self._send(await self._handle_scan(inner))
-                elif inner.get("type") == "hello":
-                    await self._send_status()
+                await self._handle_message(json.loads(msg.data))
+            except Exception:  # jedna vadná zpráva nesmí shodit spojení
+                log.exception("Zprávu nejde zpracovat")
+
+    async def _handle_message(self, data):
+        if not isinstance(data, dict):
+            return
+        if data.get("t") == "peer":
+            phones = data.get("phones")
+            phones = phones if isinstance(phones, int) and 0 <= phones < 1000 else 0
+            if phones > self.phones:
+                await self._send_status()
+            self.phones = phones
+            self.on_event("clients", phones)
+        elif data.get("t") == "msg":
+            inner = self.box.open(str(data.get("d", "")), "p2c")
+            if not isinstance(inner, dict) or not self._fresh(inner):
+                return  # cizí, poškozená nebo přehraná zpráva
+            if inner.get("type") == "scan":
+                await self._send(await self._handle_scan(inner))
+            elif inner.get("type") == "hello":
+                await self._send_status()
 
     def _fresh(self, inner) -> bool:
-        msg_id = str(inner.get("id", ""))
+        msg_id = inner.get("id")
         ts = inner.get("ts")
-        if not msg_id or not isinstance(ts, (int, float)) or abs(time.time() * 1000 - ts) > MAX_AGE_S * 1000:
+        if not isinstance(msg_id, str) or not 0 < len(msg_id) <= 64:
+            return False
+        if isinstance(ts, bool) or not isinstance(ts, (int, float)) or abs(time.time() * 1000 - ts) > MAX_AGE_S * 1000:
             return False
         if msg_id in self.seen:
             return False
@@ -107,8 +117,10 @@ class RelayClient:
         return True
 
     async def _handle_scan(self, inner):
-        code = str(inner.get("code", "")).strip()
-        lot = str(inner.get("lot", "") or "").strip()  # šarže z QR kódu produktu
+        code = inner.get("code")
+        code = code.strip() if isinstance(code, str) else ""
+        lot = inner.get("lot") or ""  # šarže z QR kódu produktu
+        lot = lot.strip() if isinstance(lot, str) else "?"
         ack = {"type": "ack", "id": inner.get("id"), "code": code}
         if not valid_code(code):
             return {**ack, "ok": False, "error": "Neplatný EAN kód"}

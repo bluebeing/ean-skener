@@ -39,6 +39,8 @@ DEFAULTS = {
     "products_file": "",
     # s načtenou tabulkou vepisovat název produktu místo EANu
     "write_name": True,
+    # už se připojil telefon → okno s párovacím QR se po startu neotevírá samo
+    "paired": False,
 }
 
 
@@ -81,6 +83,7 @@ class Config:
         with self._lock:
             self._data["room"] = new_room()
             self._data["key"] = new_key()
+            self._data["paired"] = False
         if save:
             self.save()
 
