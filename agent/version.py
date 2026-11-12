@@ -1,2 +1,2 @@
 """Verze agenta – mění ji release.ps1 při vydání nové verze."""
-__version__ = "1.2.0"
+__version__ = "1.3.0"
