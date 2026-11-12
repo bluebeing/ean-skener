@@ -370,6 +370,8 @@ class App:
                     where = f" → {data['target']}" if data["target"] else ""
                     what = f"{data['code']} = {data['name']}" if data.get("name") else data["code"]
                     note = f"\n⚠ {data['warn']}" if data.get("warn") else ""
+                    if data.get("lot"):
+                        note += f"\nŠarže {data['lot']}" + (" je ve schránce (Ctrl+V)" if data.get("lot_copied") else "")
                     self.last_lbl.configure(text=f"Poslední kód: {what}{where}{note}",
                                             fg=WARN if data.get("warn") else FG)
         except queue.Empty:

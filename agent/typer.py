@@ -110,10 +110,13 @@ def foreground_title() -> str:
     return buf.value
 
 
-def type_code(code: str, mode="unicode", suffix="none", delay_ms=8, clipboard=True) -> str:
-    """Vepíše kód do okna s fokusem a vrátí titulek toho okna."""
+def type_code(code: str, mode="unicode", suffix="none", delay_ms=8, clipboard=True, clipboard_text=None) -> str:
+    """Vepíše kód do okna s fokusem a vrátí titulek toho okna.
+
+    Do schránky jde clipboard_text, je-li zadán (např. šarže z QR kódu), jinak vepisovaný text.
+    """
     if clipboard:
-        copy_to_clipboard(code)
+        copy_to_clipboard(code if clipboard_text is None else clipboard_text)
     if mode == "off":
         return foreground_title()
     delay = max(delay_ms, 0) / 1000

@@ -120,8 +120,23 @@ async def run(entry_value, clipboard_value):
             if not DRY:
                 check("vepsáno jen jednou", entry_value() == typed, repr(entry_value()))
 
+            # QR kód produktu: EAN se vepíše, šarže jde do schránky
+            before = entry_value()
+            await ws.send_str(sealed({"type": "scan", "code": "4006381333931", "lot": "20261020", "id": "q1"}))
+            ack = await next_msg(ws, timeout=5) or {}
+            await asyncio.sleep(0.5)
+            check("QR se šarží: šarže v odpovědi", ack.get("ok") is True and ack.get("lot") == "20261020",
+                  f"lot={ack.get('lot')!r} ve schránce={ack.get('lot_copied')}")
+            if not DRY:
+                check("QR se šarží: vepsán EAN, šarže ve schránce",
+                      entry_value() == before + ack.get("typed", "?") and clipboard_value() == "20261020",
+                      f"schránka={clipboard_value()!r}")
+            await ws.send_str(sealed({"type": "scan", "code": "4006381333931", "lot": "12;rm -rf", "id": "q2"}))
+            ack = await next_msg(ws, timeout=5) or {}
+            check("neplatná šarže odmítnuta", ack.get("ok") is False, ack.get("error", ""))
+
             if cfg["products_file"] and cfg["write_name"]:
-                await products_tests(ws, entry_value, clipboard_value, "" if DRY else typed)
+                await products_tests(ws, entry_value, clipboard_value, "" if DRY else entry_value())
 
 
 async def products_tests(ws, entry_value, clipboard_value, before):

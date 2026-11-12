@@ -1,6 +1,6 @@
 'use strict';
 
-const EAN_FORMATS = ['ean_13', 'ean_8', 'upc_a'];
+const SCAN_FORMATS = ['ean_13', 'ean_8', 'upc_a', 'qr_code']; // QR = kód produktu s šarží
 const SAME_CODE_COOLDOWN_MS = 2000;
 const SCAN_INTERVAL_MS = 120;
 const HISTORY_SIZE = 5;
@@ -220,8 +220,8 @@ function randomId() {
   return b64e(crypto.getRandomValues(new Uint8Array(9)));
 }
 
-async function sendCode(code) {
-  const entry = { code, id: randomId(), status: 'pending', at: Date.now() };
+async function sendCode(code, lot = '') {
+  const entry = { code, lot, id: randomId(), status: 'pending', at: Date.now() };
   addHistory(entry);
   showLast(code, 'Odesílám…', '');
   if (!state.ws || state.ws.readyState !== 1 || !state.connected) {
@@ -233,7 +233,7 @@ async function sendCode(code) {
     return;
   }
   state.pending.set(entry.id, entry);
-  state.ws.send(JSON.stringify({ t: 'msg', d: await seal({ type: 'scan', code, id: entry.id }) }));
+  state.ws.send(JSON.stringify({ t: 'msg', d: await seal({ type: 'scan', code, lot, id: entry.id }) }));
   entry.timer = setTimeout(() => {
     if (state.pending.delete(entry.id)) {
       entry.status = 'err'; entry.info = 'PC neodpovědělo';
@@ -253,6 +253,7 @@ function onAck(msg) {
   if (!msg.ok) entry.info = msg.error;
   else if (msg.warn) entry.info = `${msg.warn}, vepsán EAN${where}`;
   else entry.info = `${msg.name ? 'Vepsán název' : 'Vepsáno'}${where}`;
+  if (msg.ok && msg.lot) entry.info += msg.lot_copied ? ` · šarže ${msg.lot} ve schránce` : ` · šarže ${msg.lot}`;
   renderHistory();
   showLast(entry.code, entry.info, entry.status, entry.name);
   beep(msg.ok && !msg.warn); flash(msg.ok && !msg.warn);
@@ -294,9 +295,10 @@ function renderHistory() {
     const code = document.createElement('span');
     code.className = 'code'; code.textContent = e.code;
     main.append(code);
-    if (e.name) {
+    const detail = [e.name, e.lot ? `šarže ${e.lot}` : ''].filter(Boolean).join(' · ');
+    if (detail) {
       const name = document.createElement('span');
-      name.className = 'name'; name.textContent = e.name;
+      name.className = 'name'; name.textContent = detail;
       main.append(name);
     }
     const meta = document.createElement('span');
@@ -304,11 +306,11 @@ function renderHistory() {
     const mark = { pending: '…', ok: '✓ ', warn: '⚠ ' }[e.status] || '✗ ';
     meta.textContent = mark + time;
     li.append(main, meta);
-    li.onclick = () => { unlockAudio(); sendCode(e.code); };
+    li.onclick = () => { unlockAudio(); sendCode(e.code, e.lot || ''); };
     ul.appendChild(li);
   });
-  store.set('ean.history', JSON.stringify(state.history.map(({ code, status, at, info, name }) =>
-    ({ code, status: status === 'pending' ? 'err' : status, at, info, name }))));
+  store.set('ean.history', JSON.stringify(state.history.map(({ code, lot, status, at, info, name }) =>
+    ({ code, lot, status: status === 'pending' ? 'err' : status, at, info, name }))));
 }
 
 function showPairing(needed) {
@@ -405,13 +407,13 @@ async function scanFrame() {
   if (!state.stream) return;
   try {
     if (state.detectorMode !== state.mode) {
-      state.detector = await createDetector(state.mode === 'pair' ? ['qr_code'] : EAN_FORMATS);
+      state.detector = await createDetector(state.mode === 'pair' ? ['qr_code'] : SCAN_FORMATS);
       state.detectorMode = state.mode;
     }
     if (video.readyState >= 2) {
       const codes = await state.detector.detect(video);
       for (const c of codes) {
-        if (handleDetected(c.rawValue)) break;
+        if (handleDetected(c.rawValue, c.format)) break;
       }
     }
   } catch (e) {
@@ -422,18 +424,32 @@ async function scanFrame() {
   scheduleScan(SCAN_INTERVAL_MS);
 }
 
-function handleDetected(raw) {
+// QR kód produktu: EAN, volitelně L<šarže> a E<expirace RRRRMMDD>, např. 8595685258461L20261020E20270228
+function parseProductQr(raw) {
+  const m = String(raw || '').trim().match(/^(\d{8}|\d{12,13})(?:L(\d{1,20}))?(?:E(\d{8}))?$/);
+  if (!m || !eanValid(m[1])) return null;
+  return { code: m[1], lot: m[2] || '' };
+}
+
+function handleDetected(raw, format) {
   if (state.mode === 'pair') return handlePairQr(raw);
-  const code = String(raw || '').trim();
-  if (!eanValid(code)) return false;
+  const text = String(raw || '').trim();
+  let item;
+  if (format === 'qr_code') {
+    item = parseProductQr(text);
+    if (!item) return parsePairing(text) ? handlePairQr(text) : false; // i párovací QR jde naskenovat rovnou
+  } else {
+    if (!eanValid(text)) return false;
+    item = { code: text, lot: '' };
+  }
   const now = Date.now();
-  if (code === state.lastCode && now - state.lastCodeAt < SAME_CODE_COOLDOWN_MS) {
+  if (text === state.lastCode && now - state.lastCodeAt < SAME_CODE_COOLDOWN_MS) {
     state.lastCodeAt = now; // dokud kód drží v záběru, znovu se neodešle
     return true;
   }
-  state.lastCode = code;
+  state.lastCode = text;
   state.lastCodeAt = now;
-  sendCode(code);
+  sendCode(item.code, item.lot);
   return true;
 }
 

@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import re
 import socket
 import threading
 import time
@@ -14,6 +15,7 @@ import typer
 from crypto_box import Box, valid_code
 
 MAX_AGE_S = 60  # starší zprávy se zahodí (ochrana proti přehrání)
+LOT_RE = re.compile(r"^[0-9A-Za-z]{1,20}$")  # šarže smí obsahovat jen písmena a číslice
 log = logging.getLogger("ean.relay")
 
 
@@ -106,21 +108,37 @@ class RelayClient:
 
     async def _handle_scan(self, inner):
         code = str(inner.get("code", "")).strip()
+        lot = str(inner.get("lot", "") or "").strip()  # šarže z QR kódu produktu
         ack = {"type": "ack", "id": inner.get("id"), "code": code}
         if not valid_code(code):
             return {**ack, "ok": False, "error": "Neplatný EAN kód"}
+        if lot and not LOT_RE.match(lot):
+            return {**ack, "ok": False, "error": "Neplatná šarže"}
         if self.paused:
             return {**ack, "ok": False, "error": "Příjem na PC je pozastaven"}
         text, extra = await self.loop.run_in_executor(self.typing, self._text_for, code)
+        clip = self._clipboard_for(text, lot)
         try:
             target = await self.loop.run_in_executor(
                 self.typing, typer.type_code, text,
                 self.cfg["typing_mode"], self.cfg["suffix"], self.cfg["key_delay_ms"],
-                self.cfg["clipboard"])
+                clip is not None, clip)
         except OSError as e:
             return {**ack, "ok": False, "error": str(e)}
+        if lot:
+            extra = {**extra, "lot": lot, "lot_copied": clip == lot}
         self.on_event("scan", {"code": code, "target": target, "text": text, **extra})
         return {**ack, "ok": True, "target": target, "typed": text, **extra}
+
+    def _clipboard_for(self, text, lot):
+        """Co dát do schránky (None = nic).
+
+        Šarže z QR kódu jde do schránky vždy, aby šla vložit přes Ctrl+V jinam v Abře.
+        Výjimka: v režimu „jen schránka“ (nic se nevepisuje) zůstane ve schránce název/EAN.
+        """
+        if lot and self.cfg["typing_mode"] != "off":
+            return lot
+        return text if self.cfg["clipboard"] else None
 
     def _text_for(self, code):
         """Co vepsat: název z tabulky, jinak EAN (s upozorněním pro telefon)."""

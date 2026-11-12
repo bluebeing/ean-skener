@@ -55,6 +55,23 @@ Co se vepíše:
 - Když tabulku upravíš a uložíš, agent ji do pár sekund načte znovu sám. Restart není potřeba.
 - Do schránky jde to samé, co se vepsalo.
 
+## QR kódy na produktech (EAN + šarže)
+
+Skener čte kromě čárových kódů EAN i QR kódy produktů ve tvaru:
+
+```
+8595685258461L20261020E20270228
+└─── EAN ───┘└ šarže ┘└expirace┘
+```
+
+- **EAN** (prvních 13 číslic) se zpracuje stejně jako čárový kód. Do Abry se vepíše název z tabulky, nebo EAN.
+- **Šarže** (číslo za `L`, bez písmene L) jde **do schránky**, takže ji vložíš přes **Ctrl+V** jinde v Abře. Telefon ukáže „šarže … ve schránce“.
+- **Expirace** (za `E`) se nepoužívá.
+
+Šarže jde do schránky vždy, i když je vypnuté *Kopírovat kód do schránky*. Výjimkou je režim *Nepsat, jen zkopírovat do schránky*: v něm zůstane ve schránce název nebo EAN, protože se nikam nevepisuje.
+
+Naskenováním párovacího QR kódu z okna agenta se telefon rovnou znovu spáruje.
+
 ## Nabídka v oznamovací oblasti (pravé tlačítko na ikoně)
 
 | Položka | K čemu |

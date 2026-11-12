@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'ean-skener-v4';
+const CACHE = 'ean-skener-v5';
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/apple-touch-icon.png'];
 const VENDOR = ['vendor/barcode-detector.js', 'vendor/zxing_reader.wasm'];
